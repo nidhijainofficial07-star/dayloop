@@ -1,0 +1,15 @@
+{
+  "title": "DayLoop — Daily accountability, made simple",
+  "description": "Plan your day, stay accountable, focus on what matters, and close the loop with thoughtful daily reviews.",
+  "language": "en",
+  "robots": {
+    "index": true
+  },
+  "icons": {
+    "icon": "dayloop-icon.svg"
+  },
+  "accessibility": {
+    "addBypassLinks": true,
+    "ignoreReducedMotion": false
+  }
+}
