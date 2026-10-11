@@ -491,8 +491,12 @@ export default function App() {
   const [focusDuration, setFocusDuration] = useState(
     () => Number(localStorage.getItem("dayloop-focus-duration")) || 25,
   )
-  const [focusSeconds, setFocusSeconds] = useState(() => focusDuration * 60)
+  // Stopwatch elapsed time, rather than a countdown.
+  const [focusSeconds, setFocusSeconds] = useState(0)
   const [focusRunning, setFocusRunning] = useState(false)
+  const [studySessions, setStudySessions] = useState<StudySession[]>(() =>
+    readStoredArray<StudySession>("dayloop-study-sessions"),
+  )
   const [reviewPrompt, setReviewPrompt] = useState(false)
   const [reviewed, setReviewed] = useState<number[]>([])
   const [endTime, setEndTime] = useState(
@@ -572,16 +576,14 @@ export default function App() {
   useEffect(() => {
     if (!focusRunning) return
     const timer = window.setInterval(() => {
-      setFocusSeconds((seconds) => {
-        if (seconds <= 1) {
-          setFocusRunning(false)
-          return 0
-        }
-        return seconds - 1
-      })
+      setFocusSeconds((seconds) => seconds + 1)
     }, 1000)
     return () => window.clearInterval(timer)
   }, [focusRunning])
+
+  useEffect(() => {
+    localStorage.setItem("dayloop-study-sessions", JSON.stringify(studySessions))
+  }, [studySessions])
 
   useEffect(() => {
     const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`
@@ -696,6 +698,11 @@ export default function App() {
   const percentage = todayTasks.length
     ? Math.round((completed / todayTasks.length) * 100)
     : 0
+  const todayStudySeconds =
+    studySessions
+      .filter((session) => session.date === todayKey)
+      .reduce((total, session) => total + session.seconds, 0) +
+    focusSeconds
   const unfinishedForReview = todayTasks.filter(
     (task) => !task.completed && !reviewed.includes(task.id),
   )
@@ -909,9 +916,34 @@ export default function App() {
 
   function startFocus(task: Task) {
     setFocusedTask(task)
-    setFocusSeconds(focusDuration * 60)
+    setFocusSeconds(0)
     setFocusRunning(false)
     setPage("focus")
+  }
+
+  function finishFocusSession() {
+    setFocusRunning(false)
+    if (focusSeconds > 0) {
+      const session: StudySession = {
+        id: Date.now(),
+        date: todayKey,
+        taskId: focusedTask?.id ?? 0,
+        taskTitle: focusedTask?.title ?? "General study session",
+        seconds: focusSeconds,
+        savedAt: new Date().toISOString(),
+      }
+      setStudySessions((sessions) => [...sessions, session])
+    }
+    setFocusSeconds(0)
+  }
+
+  function formatDuration(totalSeconds: number) {
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+    return hours > 0
+      ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
   }
 
   function snoozeReminder(minutes: number) {
@@ -972,6 +1004,7 @@ export default function App() {
       todayTasks,
       tomorrowTasks,
       historyRecords,
+      studySessions,
       settings: { endTime, reminders, reminderTiming, focusDuration },
     }
     const url = URL.createObjectURL(
@@ -1004,6 +1037,7 @@ export default function App() {
           normalizeTasks(data.tomorrowTasks, localDateKey(tomorrowDate)),
         )
         setHistoryRecords(data.historyRecords)
+        if (Array.isArray(data.studySessions)) setStudySessions(data.studySessions)
         if (data.settings && typeof data.settings === "object") {
           if (typeof data.settings.endTime === "string")
             setEndTime(data.settings.endTime)
@@ -1042,6 +1076,8 @@ export default function App() {
     setTodayTasks([])
     setTomorrowTasks([])
     setHistoryRecords([])
+    setStudySessions([])
+    localStorage.removeItem("dayloop-study-sessions")
     setReviewed([])
     notifiedTasks.current.clear()
   }
@@ -1458,57 +1494,58 @@ export default function App() {
             />
             <section className="focus-layout">
               <div className="focus-main">
-                {focusedTask ? (
-                  <>
-                    <div className="focus-task-label">
-                      <Icon name="timer" size={16} /> CURRENT FOCUS
-                    </div>
-                    <h2>{focusedTask.title}</h2>
-                    {focusedTask.notes && <p>{focusedTask.notes}</p>}
-                    <div className="focus-tags">
-                      {focusedTask.category && (
-                        <span>{focusedTask.category}</span>
-                      )}
-                      {focusedTask.priority && (
-                        <span>{focusedTask.priority} priority</span>
-                      )}
-                      {focusedTask.reminder && (
-                        <span>Due {focusedTask.reminder}</span>
-                      )}
-                    </div>
-                    <div className="focus-timer">
-                      {String(Math.floor(focusSeconds / 60)).padStart(2, "0")}:
-                      {String(focusSeconds % 60).padStart(2, "0")}
-                    </div>
-                    <div className="focus-actions">
-                      <button
-                        className="primary-button"
-                        onClick={() => {
-                          if (focusSeconds === 0)
-                            setFocusSeconds(focusDuration * 60)
-                          setFocusRunning(!focusRunning)
-                        }}
-                      >
-                        {focusRunning
-                          ? "Pause"
-                          : focusSeconds === 0
-                            ? "Restart"
-                            : "Start focus"}
-                      </button>
-                      <button
-                        onClick={() => {
-                          toggleTask(focusedTask.id)
-                          setFocusedTask(null)
-                          setFocusRunning(false)
-                        }}
-                      >
-                        Mark complete
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <EmptyState message="Choose a task from Today or your Top 3 to begin a focus session." />
+                <div className="focus-task-label">
+                  <Icon name="timer" size={16} /> STOPWATCH
+                </div>
+                <h2>{focusedTask ? focusedTask.title : "Ready when you are"}</h2>
+                {focusedTask?.notes && <p>{focusedTask.notes}</p>}
+                {focusedTask && (
+                  <div className="focus-tags">
+                    {focusedTask.category && <span>{focusedTask.category}</span>}
+                    {focusedTask.priority && <span>{focusedTask.priority} priority</span>}
+                    {focusedTask.reminder && <span>Due {focusedTask.reminder}</span>}
+                  </div>
                 )}
+                <div className="focus-timer" role="timer" aria-label="Elapsed study time">
+                  {formatDuration(focusSeconds)}
+                </div>
+                <p className="focus-session-hint">
+                  {focusRunning
+                    ? "Stopwatch running — keep going!"
+                    : focusSeconds > 0
+                      ? "Paused — resume whenever you’re ready"
+                      : focusedTask
+                        ? "Start the stopwatch when you’re ready"
+                        : "Start studying now, or choose a task from Today’s Top 3."}
+                </p>
+                <div className="focus-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => setFocusRunning((running) => !running)}
+                  >
+                    {focusRunning ? "Pause" : focusSeconds > 0 ? "Resume" : "Start stopwatch"}
+                  </button>
+                  <button onClick={finishFocusSession} disabled={focusSeconds === 0}>
+                    Finish & save
+                  </button>
+                  {focusedTask && (
+                    <button
+                      onClick={() => {
+                        finishFocusSession()
+                        toggleTask(focusedTask.id)
+                        setFocusedTask(null)
+                      }}
+                    >
+                      Finish & complete task
+                    </button>
+                  )}
+                </div>
+                <div className="focus-daily-total">
+                  <strong>Today’s study time</strong>
+                  <span>
+                    {formatDuration(todayStudySeconds)}
+                  </span>
+                </div>
               </div>
               <aside className="focus-queue">
                 <div className="section-heading">
@@ -1574,6 +1611,44 @@ export default function App() {
                 </div>
               </div>
               <ProgressRing value={percentage} />
+            </section>
+            <section className="profile-metrics review-metrics">
+              <div>
+                <span className="metric-icon">
+                  <Icon name="list" size={18} />
+                </span>
+                <div>
+                  <strong>{todayTasks.length}</strong>
+                  <span>Tasks planned</span>
+                </div>
+              </div>
+              <div>
+                <span className="metric-icon">
+                  <Icon name="check" size={18} />
+                </span>
+                <div>
+                  <strong>{completed}</strong>
+                  <span>Tasks completed</span>
+                </div>
+              </div>
+              <div>
+                <span className="metric-icon coral">
+                  <Icon name="clock" size={18} />
+                </span>
+                <div>
+                  <strong>{remaining}</strong>
+                  <span>Tasks pending</span>
+                </div>
+              </div>
+              <div>
+                <span className="metric-icon sand">
+                  <Icon name="timer" size={18} />
+                </span>
+                <div>
+                  <strong>{formatDuration(todayStudySeconds)}</strong>
+                  <span>Study time today</span>
+                </div>
+              </div>
             </section>
             <div className="review-grid">
               <section className="review-column">
